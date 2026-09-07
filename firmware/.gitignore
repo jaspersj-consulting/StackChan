@@ -65,3 +65,7 @@ sdkconfig
 sdkconfig.old
 
 xiaozhi-esp32/
+
+# Full-flash backups (large, device-specific, not source)
+stackchan_backup_*.bin
+stackchan_backup_*.bin.sha256
