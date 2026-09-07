@@ -9,6 +9,8 @@
 #include "../utils/random.h"
 #include <smooth_ui_toolkit.hpp>
 #include <hal/hal.h>
+#include <board.h>
+#include "display.h"
 #include <cstdint>
 #include <memory>
 
@@ -24,10 +26,20 @@ public:
     {
         // 绑定信号
         _signal_connection = GetHAL().onHeadPetGesture.connect([this](HeadPetGesture gesture) {
-            if (gesture == HeadPetGesture::SwipeForward || gesture == HeadPetGesture::SwipeBackward) {
-                _event_swipe = true;
+            if (gesture == HeadPetGesture::Press) {
+                // New touch starting - reset the swipe tracker so we can tell
+                // a plain tap apart from the start of a stroke.
+                _swiped_this_touch = false;
+            } else if (gesture == HeadPetGesture::SwipeForward || gesture == HeadPetGesture::SwipeBackward) {
+                _event_swipe        = true;
+                _swiped_this_touch  = true;
             } else if (gesture == HeadPetGesture::Release) {
-                _event_release = true;
+                if (_swiped_this_touch) {
+                    _event_release = true;
+                } else {
+                    // Touched and released without ever swiping - a plain tap/pat.
+                    _event_tap = true;
+                }
             }
         });
     }
@@ -41,7 +53,7 @@ public:
     {
         uint32_t now = GetHAL().millis();
 
-        // 处理“被抚摸中”事件
+        // 处理"被抚摸中"事件
         if (_event_swipe) {
             _event_swipe = false;
             handle_swipe(stackchan);
@@ -49,7 +61,7 @@ public:
             _is_waiting_restore = false;
         }
 
-        // 处理“手松开”事件
+        // 处理"手松开"事件
         if (_event_release) {
             _event_release = false;
             if (_in_happy_state) {
@@ -62,6 +74,24 @@ public:
         if (_is_waiting_restore && now >= _restore_tick) {
             _is_waiting_restore = false;
             restore_original_state(stackchan);
+        }
+
+        // 处理"轻拍（未抚摸）"事件 - plain tap, no swipe
+        if (_event_tap) {
+            _event_tap = false;
+            handle_patronizing_tap(stackchan);
+        }
+
+        // Restore pre-tap emotion and clear the message bubble
+        if (_is_waiting_tap_restore && now >= _tap_restore_tick) {
+            _is_waiting_tap_restore = false;
+            if (!_in_happy_state) {
+                stackchan.avatar().setEmotion(_prev_tap_emotion);
+            }
+            auto display = Board::GetInstance().GetDisplay();
+            if (display) {
+                display->ClearChatMessages();
+            }
         }
     }
 
@@ -106,6 +136,32 @@ private:
         _in_happy_state = false;
     }
 
+    void handle_patronizing_tap(Modifiable& stackchan)
+    {
+        static const char* kPatronizedPhrases[] = {
+            "I don't like to be patronized.",
+            "Please don't patronize me.",
+            "I'm not a toy, you know.",
+            "No need to pat me like that.",
+        };
+        constexpr int kNumPhrases = sizeof(kPatronizedPhrases) / sizeof(kPatronizedPhrases[0]);
+        int index                = Random::getInstance().getInt(0, kNumPhrases - 1);
+
+        auto display = Board::GetInstance().GetDisplay();
+        if (display) {
+            display->SetChatMessage("system", kPatronizedPhrases[index]);
+        }
+
+        auto& avatar = stackchan.avatar();
+        if (!_in_happy_state && !_is_waiting_tap_restore) {
+            _prev_tap_emotion = avatar.getEmotion();
+        }
+        avatar.setEmotion(avatar::Emotion::Doubt);
+
+        _is_waiting_tap_restore = true;
+        _tap_restore_tick       = GetHAL().millis() + _restore_delay_ms;
+    }
+
     void perform_pet_motion(Modifiable& stackchan)
     {
         auto& motion = stackchan.motion();
@@ -142,16 +198,23 @@ private:
 
     // 信号相关
     int _signal_connection;
-    volatile bool _event_swipe   = false;
-    volatile bool _event_release = false;
+    volatile bool _event_swipe        = false;
+    volatile bool _event_release      = false;
+    volatile bool _event_tap          = false;
+    bool _swiped_this_touch           = false;
 
-    // 状态机相关
+    // 状态机相关（抚摸/开心）
     bool _in_happy_state     = false;
     bool _is_waiting_restore = false;
     uint32_t _restore_tick   = 0;
     uint32_t _restore_delay_ms;
     int _heart_decorator_id = -1;
     int _shy_decorator_id   = -1;
+
+    // 状态机相关（轻拍/被冒犯）
+    bool _is_waiting_tap_restore  = false;
+    uint32_t _tap_restore_tick    = 0;
+    avatar::Emotion _prev_tap_emotion = avatar::Emotion::Neutral;
 
     // 记忆相关
     avatar::Emotion _prev_emotion = avatar::Emotion::Neutral;
