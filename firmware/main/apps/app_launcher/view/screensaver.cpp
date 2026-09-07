@@ -17,7 +17,7 @@ static const Vector2 _screen_size               = {320, 240};
 static const Vector2 _logo_size                 = {64, 48};
 static const int _logo_id                       = 666;
 static const std::vector<uint32_t> _logo_colors = {
-    0xffffff, 0xfffa01, 0xff8300, 0x00feff, 0xff2600, 0xbe00ff, 0x0026ff, 0xff008b,
+    0xe23d28, 0x4b7f3d, 0xf6c445, 0xf4791f, 0x4a5fc1, 0x6b3fa0, 0x6f4423, 0xfff3d9,
 };
 static const uint32_t _bg_color = 0x000000;
 
