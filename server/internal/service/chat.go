@@ -184,7 +184,10 @@ func callOllamaChat(ctx context.Context, baseUrl, model string, messages []ollam
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: 60 * time.Second}
+	// 240s: this Mac Mini's qwen3:14b measured throughput is ~6.8 tok/s
+	// generation (~170s for a large prompt) - a shorter timeout would kill
+	// real, correctly-working requests as false failures.
+	client := &http.Client{Timeout: 240 * time.Second}
 	httpRes, err := client.Do(httpReq)
 	if err != nil {
 		return "", gerror.WrapCode(gcode.CodeInternalError, err, "failed to reach ollama")
