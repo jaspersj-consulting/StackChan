@@ -30,6 +30,7 @@ type DeviceColumns struct {
 	Name     string //
 	Uid      string // Bound user UID
 	BindTime string // Device binding time
+	AgentId  string // Bound agent id
 }
 
 // deviceColumns holds the columns for the table device.
@@ -38,6 +39,7 @@ var deviceColumns = DeviceColumns{
 	Name:     "name",
 	Uid:      "uid",
 	BindTime: "bind_time",
+	AgentId:  "agent_id",
 }
 
 // NewDeviceDao creates and returns a new DAO object for table data access.

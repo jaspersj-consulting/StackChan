@@ -15,4 +15,5 @@ type Device struct {
 	Name     string `json:"name"     orm:"name"      description:""`                    //
 	Uid      int64  `json:"uid"      orm:"uid"       description:"Bound user UID"`      // Bound user UID
 	BindTime string `json:"bindTime" orm:"bind_time" description:"Device binding time"` // Device binding time
+	AgentId  int64  `json:"agentId"  orm:"agent_id"  description:"Bound agent id"`         // Bound agent id
 }

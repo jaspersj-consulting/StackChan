@@ -10,7 +10,6 @@ import (
 	"stackChan/internal/dao"
 	"stackChan/internal/model"
 	"stackChan/internal/service"
-	"stackChan/internal/xiaozhi"
 
 	"github.com/gogf/gf/v2/errors/gcode"
 	"github.com/gogf/gf/v2/errors/gerror"
@@ -29,22 +28,12 @@ func (c *ControllerV2) UnbindDevice(ctx context.Context, req *v2.UnbindDeviceReq
 	if err != nil {
 		return nil, gerror.NewCode(gcode.CodeInternalError)
 	}
-	restoreResponse, err := service.RestoreDefaultAgent(mac)
+	restoreResponse, err := service.RestoreDefaultAgent(ctx, mac)
 	if err != nil {
 		return nil, err
 	}
 	if !restoreResponse {
 		return nil, gerror.NewCode(gcode.CodeInternalError, "restore default agent failed")
-	}
-
-	/// xiaozhi Unbind Device
-	unbindResponse, err := xiaozhi.UnbindDevice(&mac)
-	if err != nil {
-		return nil, gerror.NewCode(gcode.CodeInternalError)
-	}
-	if !unbindResponse {
-		g.Log().Error(ctx, "xiaozhi Unbind Device failed")
-		return nil, gerror.NewCode(gcode.CodeInternalError)
 	}
 
 	/// update device table

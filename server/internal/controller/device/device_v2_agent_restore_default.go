@@ -18,7 +18,7 @@ func (c *ControllerV2) AgentRestoreDefault(ctx context.Context, req *v2.AgentRes
 	if req.Mac == "" {
 		return nil, gerror.NewCode(gcode.CodeMissingParameter, "Device MAC address cannot be empty")
 	}
-	restoreResponse, err := service.RestoreDefaultAgent(req.Mac)
+	restoreResponse, err := service.RestoreDefaultAgent(ctx, req.Mac)
 	if err != nil {
 		return nil, err
 	}

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"stackChan/internal/boot"
 	"stackChan/internal/controller/admin"
+	"stackChan/internal/controller/agent"
 	"stackChan/internal/controller/appstore"
 	"stackChan/internal/controller/dance"
 	"stackChan/internal/controller/device"
@@ -77,7 +78,7 @@ var (
 
 			s.Group("/admin/stackChan", func(group *ghttp.RouterGroup) {
 				group.Middleware(middleware.AdminTokenAuthMiddleware, ghttp.MiddlewareHandlerResponse)
-				group.Bind(admin.NewV1(), file.NewV1())
+				group.Bind(admin.NewV1(), file.NewV1(), agent.NewV1())
 			})
 
 			// Do not use SetServerRoot, globally only provide frontend entry via /web
