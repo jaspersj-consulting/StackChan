@@ -22,3 +22,12 @@ type UnbindDeviceReq struct {
 }
 
 type UnbindDeviceRes bool
+
+type ChatReq struct {
+	g.Meta `path:"/device/chat" method:"post" tags:"Device" summary:"Send a transcribed user utterance to the device's bound agent and get a text reply for StackChan device"`
+	Text   string `json:"text" v:"required" description:"Transcribed user utterance"`
+}
+
+type ChatRes struct {
+	Text string `json:"text" description:"Assistant reply text"`
+}

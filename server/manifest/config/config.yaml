@@ -39,3 +39,7 @@ rsa:
 xiaozhi:
   secret_key:
   generate_license_token:
+
+ollama:
+  base_url: ""       # e.g. http://mac-mini.<tailnet>.ts.net:11434 - reachable Ollama endpoint
+  default_model: ""  # fallback model name if an agent's llm_model is unset

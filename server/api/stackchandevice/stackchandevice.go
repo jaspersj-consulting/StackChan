@@ -13,4 +13,5 @@ import (
 type IStackchandeviceV2 interface {
 	GetDeviceUserInfo(ctx context.Context, req *v2.GetDeviceUserInfoReq) (res *v2.GetDeviceUserInfoRes, err error)
 	UnbindDevice(ctx context.Context, req *v2.UnbindDeviceReq) (res *v2.UnbindDeviceRes, err error)
+	Chat(ctx context.Context, req *v2.ChatReq) (res *v2.ChatRes, err error)
 }
