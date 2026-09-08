@@ -114,6 +114,14 @@ func ChatWithAgent(ctx context.Context, mac string, text string) (string, error)
 // agent if the device has none bound yet (mirrors RestoreDefaultAgent's
 // fallback semantics).
 func resolveDeviceAgent(ctx context.Context, mac string) (*entity.Agent, error) {
+	// chat_message.device_mac has a foreign key to device.mac (see
+	// check_list/002_agent_management.sql), so a device row must exist
+	// before any chat turn can be recorded - ensure it does, same as
+	// GetDeviceUserInfo does before its own device query.
+	if _, err := CreateMacIfNotExists(ctx, mac); err != nil {
+		return nil, gerror.WrapCode(gcode.CodeDbOperationError, err, "failed to ensure device record exists")
+	}
+
 	var device entity.Device
 	err := dao.Device.Ctx(ctx).Where("mac = ?", mac).Scan(&device)
 	if err != nil {
