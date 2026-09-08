@@ -61,6 +61,21 @@
 
 #define XCLK_FREQ_HZ 20000000
 
+// M5Stack Module LLM (AX630C) UART pins - CoreS3 M-Bus (Port.C).
+// CORRECTED after milestone-1 ping timed out with the module's status LED
+// already solid green (module fully booted/ready, so the failure wasn't a
+// boot-timing issue - see chat/progress doc). Re-derived from CoreS3's own
+// M-Bus pinout table (Port.C: G18=PC_RX, G17=PC_TX, i.e. the HOST's own
+// receive/transmit lines) rather than the "Module LLM Serial Communication
+// Pin Switching" doc's "TX pin: G18, RX pin: G17", which describes the
+// MODULE's own pin roles, not the host's - host RX must wire to the
+// module's TX and vice versa, so this is the opposite assignment from what
+// was set previously. Not yet verified on hardware - this swap is the next
+// thing to test.
+#define MODULE_LLM_UART_RX_PIN GPIO_NUM_18
+#define MODULE_LLM_UART_TX_PIN GPIO_NUM_17
+#define MODULE_LLM_UART_BAUD_RATE 115200
+
  
 
 #endif // _BOARD_CONFIG_H_
