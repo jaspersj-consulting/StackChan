@@ -69,3 +69,6 @@ xiaozhi-esp32/
 # Full-flash backups (large, device-specific, not source)
 stackchan_backup_*.bin
 stackchan_backup_*.bin.sha256
+
+# Self-hosted server auth key (local-only; specific to this deployment, not upstream-shareable)
+main/certs/stackchan_server_public_key.pem
