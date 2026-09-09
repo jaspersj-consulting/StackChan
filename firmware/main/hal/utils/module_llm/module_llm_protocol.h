@@ -27,6 +27,13 @@ struct Response {
     int error_code    = 0;
     std::string error_message;
     std::string data_json;  // raw JSON text of the response's "data" field (empty if absent/null)
+    // The response's own "work_id" field. For a "setup" call this is a NEW
+    // session id (e.g. "llm.1003") that must be used for that unit's
+    // follow-up calls instead of the generic work_id ("llm") used to create
+    // it - confirmed from M5Stack's StackFlow API examples. Empty if the
+    // response had no work_id (shouldn't happen per the documented frame
+    // shape, but not assumed).
+    std::string work_id;
 };
 
 // Brings up the UART peripheral (pins/baud from hal/board/config.h) and

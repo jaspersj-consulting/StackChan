@@ -32,4 +32,44 @@ void Hal::module_llm_init()
     } else {
         mclog::tagInfo(_tag, "sys.lsmode: {}", models);
     }
+
+    // --- Quick test, ahead of milestone 2: one-shot non-streaming LLM chat ---
+    // Confirms the module can actually reason and reply over UART, not just
+    // report its installed capabilities, before investing in the
+    // streaming/audio-routing work milestone 2 needs for ASR/TTS/KWS. Uses
+    // the module's non-streaming response_format ("llm.utf-8", not
+    // ".stream"), which per M5Stack's own StackFlow API examples returns the
+    // complete reply in a single frame - so this reuses the existing
+    // synchronous request() exactly like ping()/list_models() above, with no
+    // new protocol-handling code. Field values mirror M5Stack's documented
+    // working example as closely as possible (model name, enkws, etc.)
+    // rather than guessing at what changing them would do.
+    module_llm::Response llm_setup = module_llm::request(
+        "llm", "setup",
+        R"({"model":"qwen2.5-0.5B-prefill-20e","response_format":"llm.utf-8","input":"llm.utf-8","enoutput":true,"enkws":true,"max_token_len":127,"prompt":"You are a concise cooking assistant. Answer in one short sentence."})",
+        10000);
+    if (!llm_setup.ok) {
+        mclog::tagWarn(_tag, "llm setup failed: code={} message={}", llm_setup.error_code, llm_setup.error_message);
+        return;
+    }
+    if (llm_setup.work_id.empty()) {
+        mclog::tagWarn(_tag, "llm setup succeeded but response had no work_id - cannot send inference");
+        return;
+    }
+    mclog::tagInfo(_tag, "llm setup ok, session work_id={}", llm_setup.work_id);
+
+    // Per the API doc, follow-up calls for this session must use the NEW
+    // work_id from the setup response (e.g. "llm.1003"), not the generic
+    // "llm" work_id used to create it.
+    module_llm::Response llm_reply =
+        module_llm::request(llm_setup.work_id, "inference", R"("What temperature should I sear a steak at?")", 15000);
+    if (!llm_reply.ok) {
+        mclog::tagWarn(_tag, "llm inference failed: code={} message={}", llm_reply.error_code, llm_reply.error_message);
+        return;
+    }
+    // data_json here is the response's "data" field re-serialized as JSON
+    // text, so it will print with surrounding quotes/escapes (e.g.
+    // "\"For searing a steak, preheat...\"") rather than plain text - fine
+    // for this diagnostic, not worth unescaping for a one-shot boot test.
+    mclog::tagInfo(_tag, "llm reply: {}", llm_reply.data_json);
 }

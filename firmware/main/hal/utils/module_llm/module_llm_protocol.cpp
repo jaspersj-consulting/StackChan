@@ -215,6 +215,11 @@ Response request(std::string_view work_id, std::string_view action, std::string_
         return result;
     }
 
+    cJSON *work_id_json = cJSON_GetObjectItem(root, "work_id");
+    if (work_id_json && cJSON_IsString(work_id_json)) {
+        result.work_id = work_id_json->valuestring;
+    }
+
     cJSON *error = cJSON_GetObjectItem(root, "error");
     if (error) {
         cJSON *code    = cJSON_GetObjectItem(error, "code");
