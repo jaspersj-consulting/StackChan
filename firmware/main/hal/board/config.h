@@ -76,6 +76,23 @@
 #define MODULE_LLM_UART_TX_PIN GPIO_NUM_17
 #define MODULE_LLM_UART_BAUD_RATE 115200
 
+// Where KWS/ASR listen and where TTS plays back. The Module LLM (AX630C)
+// has its own onboard microphone (MSM421A) and speaker (8ohm@1W) - M5Stack's
+// hardware docs confirm this independently of the API docs, which is why
+// ASR/KWS's "input":"sys.pcm" almost certainly reads from the module's own
+// mic rather than PCM pushed over UART from CoreS3: M5Stack's StackFlow API
+// docs don't document any JSON frame shape for pushing external PCM at all.
+// MODULE_MIC is the only implemented option right now. CORES3_MIC (routing
+// CoreS3's existing mic/speaker pipeline through the module instead, for one
+// unified physical audio experience) is feature-flagged for later - it's
+// blocked on working out that undocumented UART PCM wire format first, or
+// may need a hardware change (e.g. I2S between the boards) if it turns out
+// UART can't carry it at all. See the firmware progress doc's milestone-2
+// section for the full writeup.
+#define MODULE_LLM_AUDIO_SOURCE_MODULE_MIC 1
+#define MODULE_LLM_AUDIO_SOURCE_CORES3_MIC 2  // NOT IMPLEMENTED YET
+#define MODULE_LLM_AUDIO_SOURCE MODULE_LLM_AUDIO_SOURCE_MODULE_MIC
+
  
 
 #endif // _BOARD_CONFIG_H_

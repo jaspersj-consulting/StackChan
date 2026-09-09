@@ -38,6 +38,11 @@ std::map<std::string, PendingRequest *> _pending;
 std::atomic<uint32_t> _next_request_id{1};
 bool _initialized = false;
 
+// Callbacks for unsolicited frames (ASR results, KWS detections - see
+// on_unsolicited()'s header comment), keyed by the frame's own work_id.
+SemaphoreHandle_t _unsolicited_mutex = nullptr;
+std::map<std::string, std::function<void(const std::string &)>> _unsolicited;
+
 std::string next_request_id()
 {
     return std::to_string(_next_request_id.fetch_add(1));
@@ -64,10 +69,40 @@ void handle_line(const std::string &line)
     auto it = _pending.find(request_id);
     if (it == _pending.end()) {
         xSemaphoreGive(_pending_mutex);
-        // Not something request() is currently waiting on. Either it timed
-        // out already, or (once streaming is implemented) this is a
-        // delta/finish frame - not handled yet, see header comment.
-        mclog::tagInfo(_tag, "unmatched frame (request_id {}), dropping: {}", request_id, line);
+
+        // Not something request() is currently waiting on. Could be an
+        // unsolicited push (ASR result, KWS detection) - those carry their
+        // own work_id, which is what on_unsolicited() callbacks are keyed
+        // by, not request_id (the module picks its own request_id for these,
+        // unrelated to anything we sent). Could also be a late streaming
+        // delta/finish frame for a request() call that already returned on
+        // the first frame - not handled yet, see header comment.
+        cJSON *work_id_json = cJSON_GetObjectItem(root, "work_id");
+        std::string work_id = (work_id_json && cJSON_IsString(work_id_json)) ? work_id_json->valuestring : "";
+
+        std::function<void(const std::string &)> handler;
+        if (!work_id.empty()) {
+            xSemaphoreTake(_unsolicited_mutex, portMAX_DELAY);
+            auto uit = _unsolicited.find(work_id);
+            if (uit != _unsolicited.end()) {
+                handler = uit->second;
+            }
+            xSemaphoreGive(_unsolicited_mutex);
+        }
+
+        if (handler) {
+            cJSON *data = cJSON_GetObjectItem(root, "data");
+            char *data_text = data ? cJSON_PrintUnformatted(data) : nullptr;
+            std::string data_json = data_text ? data_text : "";
+            if (data_text) {
+                cJSON_free(data_text);
+            }
+            cJSON_Delete(root);
+            handler(data_json);
+            return;
+        }
+
+        mclog::tagInfo(_tag, "unmatched frame (request_id {}, work_id {}), dropping: {}", request_id, work_id, line);
         cJSON_Delete(root);
         return;
     }
@@ -135,7 +170,8 @@ void init()
     ESP_ERROR_CHECK(uart_set_pin(kUartPort, MODULE_LLM_UART_TX_PIN, MODULE_LLM_UART_RX_PIN, UART_PIN_NO_CHANGE,
                                   UART_PIN_NO_CHANGE));
 
-    _pending_mutex = xSemaphoreCreateMutex();
+    _pending_mutex     = xSemaphoreCreateMutex();
+    _unsolicited_mutex = xSemaphoreCreateMutex();
 
     xTaskCreate(reader_task, "module_llm_reader", 4096, nullptr, 5, nullptr);
 
@@ -251,6 +287,18 @@ Response request(std::string_view work_id, std::string_view action, std::string_
     }
 
     return result;
+}
+
+void on_unsolicited(std::string_view work_id, std::function<void(const std::string &)> callback)
+{
+    std::string key(work_id);
+    xSemaphoreTake(_unsolicited_mutex, portMAX_DELAY);
+    if (callback) {
+        _unsolicited[key] = std::move(callback);
+    } else {
+        _unsolicited.erase(key);
+    }
+    xSemaphoreGive(_unsolicited_mutex);
 }
 
 bool ping()

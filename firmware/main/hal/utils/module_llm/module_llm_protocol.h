@@ -5,6 +5,7 @@
  */
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <string_view>
 
@@ -12,14 +13,23 @@
 // connected over UART. StackFlow is a line-delimited JSON request/response
 // protocol - see docs.m5stack.com/en/stackflow/module_llm/api.
 //
-// This layer only implements the synchronous request/response half of the
+// This layer implements the synchronous request/response half of the
 // protocol (used for setup/action calls and one-shot queries like sys.ping
-// and sys.lsmode). Streaming responses (ASR/LLM "delta" frames sent before a
-// "finish" frame) are not yet handled here - an incoming frame whose
-// request_id isn't currently awaited by request() is logged and dropped.
-// See the firmware progress doc's Module LLM section for what's still
-// outstanding (this is intentionally the first milestone, not the full
-// integration).
+// and sys.lsmode) via request(), plus a callback-based path for unsolicited
+// push frames via on_unsolicited() - see that function's comment for what
+// counts as "unsolicited" (ASR results, KWS detections).
+//
+// NOT yet handled: a single request() call that gets multiple response
+// frames sharing its request_id before a final one (e.g. an
+// "llm.utf-8.stream" inference, whose intermediate frames carry
+// {"delta","index","finish":false} and the last carries "finish":true).
+// request() today returns on the FIRST frame matching its request_id, so a
+// streaming call would return early with just the first delta, and later
+// frames for that same request_id would arrive after the pending entry is
+// already erased - they currently fall through to the "unmatched frame"
+// drop path, same as anything else with no matching pending request or
+// on_unsolicited handler. See the firmware progress doc's Module LLM section
+// for what's still outstanding.
 namespace module_llm {
 
 struct Response {
@@ -48,6 +58,22 @@ void init();
 // (object/array/string/etc.) and becomes the request's "data" field.
 Response request(std::string_view work_id, std::string_view action, std::string_view data_json = "",
                   uint32_t timeout_ms = 5000);
+
+// Registers a callback for unsolicited frames belonging to `work_id` - frames
+// that arrive with no matching pending request(), which is how the module
+// pushes continuous results once a unit is put in a listening state:
+// ASR result frames after "asr.setup" (input "sys.pcm" - the module streams
+// results with no per-chunk inference call needed, confirmed from M5Stack's
+// StackFlow docs; object "asr.stream"/"asr.utf-8.stream", frame's own
+// work_id e.g. "asr.1003", request_id is one the module picked, not one we
+// issued), and KWS detection frames after "kws.setup" (module docs are
+// explicit KWS has no inference action - it just pushes events).
+//
+// `callback` receives the raw JSON text of the frame's "data" field. It runs
+// on the reader task, so it must be fast and non-blocking - queue the real
+// work, don't do it inline. Only one callback per work_id; registering again
+// replaces the previous one. Pass an empty std::function to unregister.
+void on_unsolicited(std::string_view work_id, std::function<void(const std::string &data_json)> callback);
 
 // sys.ping - true if the module responded with error.code == 0.
 bool ping();

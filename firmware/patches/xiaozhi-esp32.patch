@@ -1,8 +1,19 @@
 diff --git a/main/application.cc b/main/application.cc
-index d69d43d..3b6f07e 100644
+index d69d43d..cf5162c 100644
 --- a/main/application.cc
 +++ b/main/application.cc
-@@ -610,33 +610,36 @@ void Application::InitializeProtocol() {
+@@ -10,6 +10,10 @@
+ #include "assets.h"
+ #include "settings.h"
+ 
++// StackChan/ChefBot addition: gates the Module LLM's ASR output on this
++// device's existing "polly" wake word - see module_llm_gate.h for why.
++#include "hal/utils/module_llm/module_llm_gate.h"
++
+ #include <cstring>
+ #include <esp_log.h>
+ #include <cJSON.h>
+@@ -610,33 +614,36 @@ void Application::InitializeProtocol() {
  }
  
  void Application::ShowActivationCode(const std::string& code, const std::string& message) {
@@ -66,6 +77,27 @@ index d69d43d..3b6f07e 100644
  }
  
  void Application::Alert(const char* status, const char* message, const char* emotion, const std::string_view& sound) {
+@@ -783,6 +790,10 @@ void Application::HandleWakeWordDetectedEvent() {
+     ESP_LOGI(TAG, "Wake word detected: %s (state: %d)", wake_word.c_str(), (int)state);
+ 
+     if (state == kDeviceStateIdle) {
++        // StackChan/ChefBot addition: open the Module LLM ASR gate on the
++        // same wake-word trigger CoreS3's own conversation flow uses below.
++        module_llm_gate::open();
++
+         audio_service_.EncodeWakeWord();
+         auto wake_word = audio_service_.GetLastWakeWord();
+ 
+@@ -869,6 +880,9 @@ void Application::HandleStateChangedEvent() {
+             display->SetEmotion("neutral"); // Then set emotion (wechat mode checks child count)
+             audio_service_.EnableVoiceProcessing(false);
+             audio_service_.EnableWakeWordDetection(true);
++            // StackChan/ChefBot addition: close the Module LLM ASR gate -
++            // the conversation window opened by the wake word above is over.
++            module_llm_gate::close();
+             break;
+         case kDeviceStateConnecting:
+             display->SetStatus(Lang::Strings::CONNECTING);
 diff --git a/main/assets.cc b/main/assets.cc
 index ad61944..6b84daf 100644
 --- a/main/assets.cc
