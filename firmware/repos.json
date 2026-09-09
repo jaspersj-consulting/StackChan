@@ -29,5 +29,11 @@
         "url": "https://github.com/espressif/esp-now.git",
         "path": "components/esp-now",
         "branch": "c33383de97f3ed2fc52117f5ef04f71990432e5d"
+    },
+    {
+        "url": "https://github.com/78/esp-ml307.git",
+        "path": "components/78__esp-ml307",
+        "branch": "ab4de7c28c8b8f809eba2f56f38090d57fce984d",
+        "patch": "patches/esp-ml307.patch"
     }
 ]

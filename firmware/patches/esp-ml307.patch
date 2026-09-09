@@ -1,0 +1,255 @@
+diff --git a/STACKCHAN_OVERRIDE.md b/STACKCHAN_OVERRIDE.md
+new file mode 100644
+index 0000000..d464c03
+--- /dev/null
++++ b/STACKCHAN_OVERRIDE.md
+@@ -0,0 +1,152 @@
++# StackChan patch: esp-ml307 disconnect-callback race fix
++
++## What this is
++
++This repo (`78/esp-ml307`, normally fetched by ESP-IDF's Component Manager
++into `firmware/managed_components/78__esp-ml307/`, gitignored, pinned by
++`firmware/main/idf_component.yml`'s `78/esp-ml307: ~3.6.4` /
++`firmware/main/dependencies.lock`) is ALSO vendored a second way in this
++project: cloned directly by `firmware/fetch_repos.py` (per the entry in
++`firmware/repos.json`) into `firmware/components/78__esp-ml307/`, at the
++exact commit the Component Manager resolved
++(`ab4de7c28c8b8f809eba2f56f38090d57fce984d`, i.e. what `~3.6.4` currently
++means in practice - see `repository_info.commit_sha` in the managed copy's
++own `idf_component.yml`), with this project's one patch
++(`firmware/patches/esp-ml307.patch`) applied on top by that same script -
++exactly the same pattern already used for `firmware/xiaozhi-esp32/` and its
++`firmware/patches/xiaozhi-esp32.patch`.
++
++**Why this exists / why not just edit `managed_components/` directly:**
++`managed_components/` is entirely owned by the Component Manager and
++gitignored - any hand-edit there is silently lost on the next clean clone,
++`idf.py fullclean`, or dependency re-resolution, with no safety net.
++
++**Why this overrides the Component-Manager-managed copy at build time:**
++ESP-IDF's documented component search precedence (highest to lowest) is:
++project `components/` -> `EXTRA_COMPONENT_DIRS` -> `managed_components/` ->
++`IDF_PATH/components`. A project component directory with the same name
++(`78__esp-ml307`) automatically wins over the managed copy, no extra
++CMake/YAML configuration needed - confirmed against ESP-IDF's official
++build-system docs before relying on this, not assumed. `managed_components/
++78__esp-ml307/` still gets fetched and still exists on disk alongside this
++one; it's simply shadowed and never compiled while this directory is
++present.
++
++**How this directory gets (re)created:** `python3 firmware/fetch_repos.py`
++clones `https://github.com/78/esp-ml307.git` at the commit above into
++`firmware/components/78__esp-ml307/` and applies
++`firmware/patches/esp-ml307.patch` via `git apply` - same mechanism as
++every other entry in `firmware/repos.json`. This directory itself is
++gitignored (`firmware/.gitignore`'s `/components/` line) and is expected to
++be absent on a fresh clone until `fetch_repos.py` runs.
++
++## What the patch changes vs. upstream commit `ab4de7c`
++
++Exactly two files, both under `src/esp/` (the WiFi/`EspNetwork` backend -
++the only backend this board actually uses; this same package's `ec801e/`
++and `ml307/` cellular-modem backends are compiled out for the `esp32`
++target and irrelevant to this project):
++
++- **`src/esp/esp_tcp.h`** - added `#include <atomic>` and one new private
++  member, `std::atomic<bool> disconnect_callback_fired_{false};`, on
++  `EspTcp`.
++- **`src/esp/esp_tcp.cc`** - two changes:
++  1. `Connect()`: resets `disconnect_callback_fired_` to `false` right
++     after `connected_ = true;`, so a fresh connection starts with a clean
++     guard.
++  2. `DoDisconnect(bool wait_for_task)`: the final
++     `if (disconnect_callback_) { disconnect_callback_(); }` is now gated
++     by `disconnect_callback_fired_.compare_exchange_strong(expected, true, ...)`
++     - only the first task to reach that line for a given connection's
++     lifetime actually invokes the callback.
++
++Plus this file itself (new, not present upstream).
++
++## The bug this fixes - full incident writeup
++
++**Symptom on hardware:** after a successful ASR -> `/stackChan/device/chat`
++-> TTS round trip in `hal_module_llm.cpp`'s new `chat_with_agent()`
++(milestone 2 full wire-up), the ESP32 would reliably crash right as the
++HTTP connection to the self-hosted server (CT141, `192.168.1.41:12800`)
++tore down. Under marginal USB power (a laptop port) this manifested as a
++**silent, total hang** - screen dark, USB gone, no panic text, unrecoverable
++without a full power cycle of the whole stack. Once powered through a
++powered USB hub (ruling out power as the actual cause - the crash still
++happened, but this time the board had enough headroom to complete its
++panic-print-and-reboot sequence and recover on its own), the real fault
++printed cleanly:
++
++```
++Guru Meditation Error: Core  0 panic'ed (Interrupt wdt timeout on CPU0).
++...
++Backtrace: ... esp_cpu_compare_and_set ... spinlock_acquire ... xQueueSemaphoreTake
++  ... pthread_mutex_lock ... std::mutex::lock() ... std::lock_guard<std::mutex>::lock_guard
++  ... HttpClient::OnTcpDisconnected() at .../http_client.cc:279
++  ... HttpClient::Open(...)::{lambda()#1}::_M_invoke at .../http_client.cc:212
++  ... EspTcp::DoDisconnect(bool) at .../esp_tcp.cc:102
++  ... EspTcp::ReceiveTask() at .../esp_tcp.cc:140
++  ... EspTcp::Connect(...)::{lambda(void*)#1}::_FUN at .../esp_tcp.cc:66
++```
++
++**Root cause, traced from this exact source (not guessed):**
++
++`chat_with_agent()` creates a short-lived `Http` object, calls
++`Open()`/`GetStatusCode()`/`ReadAll()`, and lets it fall out of scope at
++function return. `~HttpClient()` then calls `Close()` ->
++`tcp_->Disconnect()` -> `EspTcp::DoDisconnect(true)` (an *active* close, on
++our own "asr_chat" worker task): it closes the socket fd, then blocks (up
++to 10s) waiting for the background `"tcp_receive"` task to signal it has
++exited, and only then invokes `disconnect_callback_()` (==
++`HttpClient::OnTcpDisconnected()`, which takes `std::lock_guard<mutex_>`).
++
++But CT141's Go/GoFrame backend closes its end of the connection right after
++writing the response (no keep-alive), so the background `"tcp_receive"`
++task's own blocked `recv()` call is *also*, independently and concurrently,
++about to fail - and when it does, `ReceiveTask()` calls
++`DoDisconnect(false)` (a *passive* close) itself, which **also**
++unconditionally invokes `disconnect_callback_()` - from a second task,
++racing the first.
++
++Nothing in `EspTcp` (`connected_`, `tcp_fd_`, `disconnect_callback_`) was
++synchronized before this patch - confirmed by reading `esp_tcp.h`/`.cc` in
++full, not assumed. Two tasks concurrently entering
++`HttpClient::OnTcpDisconnected()`'s non-reentrant-safe locking is what the
++panic's backtrace shows directly.
++
++**This is a pre-existing bug in the upstream component**, not something
++introduced by this project's new code - `main/hal/hal_account.cpp`'s two
++`http->ReadAll()` call sites use the identical implicit-destructor pattern
++and are equally exposed; they simply haven't hit a server whose close
++timing opens this exact race window. `chat_with_agent()` is just the first
++caller in this codebase to reliably trigger it, because of how CT141
++happens to close its connections.
++
++**Scope of the fix:** intentionally narrow. It stops the one thing that
++was actively harmful - the non-reentrant callback firing twice - via an
++atomic compare-and-swap guard. It does **not** make the rest of the class
++fully thread-safe (`connected_`/`tcp_fd_` are still touched non-atomically
++from two tasks); those writes happen to be idempotent (both tasks would
++only ever write the same `false`/`-1`), so they weren't the source of the
++observed crash and were left alone to keep this patch minimal and easy to
++reason about.
++
++## Maintaining this override
++
++- **Verifying it's actually being used:** during a build, check that
++  `esp_tcp.cc.obj`/build log references trace back to
++  `firmware/components/78__esp-ml307/...`, not
++  `firmware/managed_components/78__esp-ml307/...`.
++- **If `main/idf_component.yml`'s pinned version (`~3.6.4`) is ever
++  bumped:** this override will keep pinning the OLD commit
++  (`ab4de7c28c8b8f809eba2f56f38090d57fce984d`) via `repos.json` and will
++  NOT automatically track the newer managed version. Before bumping,
++  check `78/esp-ml307`'s upstream history for whether this exact race has
++  since been fixed there. If so: remove this entry from `repos.json`,
++  delete `firmware/components/78__esp-ml307/` and
++  `firmware/patches/esp-ml307.patch`, and let the Component Manager
++  resolve the newer version normally. If not: update the `branch` field
++  in `repos.json` to the new commit/tag, re-run `fetch_repos.py`, and
++  confirm `git apply --check firmware/patches/esp-ml307.patch` still
++  applies cleanly against the new commit (re-generate the patch if it
++  doesn't - the two changes described above are small enough to reapply
++  by hand against the new source if needed).
+diff --git a/src/esp/esp_tcp.cc b/src/esp/esp_tcp.cc
+index 14a1719..8a0af5b 100644
+--- a/src/esp/esp_tcp.cc
++++ b/src/esp/esp_tcp.cc
+@@ -59,6 +59,10 @@ bool EspTcp::Connect(const std::string& host, int port) {
+     }
+ 
+     connected_ = true;
++    // StackChan local override: fresh guard for this connection's lifetime
++    // - see the members-block comment in esp_tcp.h and
++    // STACKCHAN_OVERRIDE.md for why this exists.
++    disconnect_callback_fired_.store(false, std::memory_order_relaxed);
+ 
+     xEventGroupClearBits(event_group_, ESP_TCP_EVENT_RECEIVE_TASK_EXIT);
+     xTaskCreate([](void* arg) {
+@@ -98,7 +102,48 @@ void EspTcp::DoDisconnect(bool wait_for_task) {
+     }
+ 
+     // 断开连接时触发断开回调
+-    if (disconnect_callback_) {
++    //
++    // StackChan local override (2026-09-09, Jonathan/Claude - see
++    // STACKCHAN_OVERRIDE.md in this component's root for the full
++    // incident writeup): DoDisconnect() can be entered concurrently by
++    // TWO different tasks for the SAME connection -
++    //   1) the task that owns the HttpClient, via Disconnect() ->
++    //      DoDisconnect(true) (e.g. HttpClient's destructor/Close()
++    //      running right after a successful ReadAll()), and
++    //   2) this object's own background "tcp_receive" task, via
++    //      ReceiveTask() -> DoDisconnect(false), independently noticing
++    //      the same socket died (recv() <= 0) - which happens whenever
++    //      the peer closes its end at roughly the same time as #1, or
++    //      simply because #1 already called close(tcp_fd_) out from
++    //      under this task's blocked recv() call.
++    // Both paths reach this exact call unconditionally. Without a guard,
++    // disconnect_callback_() - which is HttpClient::OnTcpDisconnected(),
++    // taking a std::lock_guard<std::mutex> on HttpClient::mutex_ - gets
++    // invoked twice, from two different tasks, for one logical
++    // disconnect event. Confirmed on hardware: this raced against
++    // hal_module_llm.cpp's chat_with_agent() (new in this project, the
++    // first caller in this codebase to hit the exact timing window -
++    // CT141's Go backend closes its end right after writing the
++    // response, unlike the servers other Http callers in this project
++    // talk to) and produced a real ESP32 crash:
++    //   Guru Meditation Error: Core 0 panic'ed (Interrupt wdt timeout on CPU0)
++    //   ... HttpClient::OnTcpDisconnected() at http_client.cc:279
++    //   ... EspTcp::ReceiveTask() at esp_tcp.cc:140
++    // This is a PRE-EXISTING, un-guarded race in the upstream component
++    // (confirmed: connected_, tcp_fd_, and disconnect_callback_ have no
++    // synchronization anywhere in this class before this patch) - other
++    // callers in this codebase (hal_account.cpp) use the same
++    // implicit-destructor pattern and are equally exposed; they most
++    // likely just haven't hit a server that closes its end quickly
++    // enough to open this exact race window.
++    //
++    // Fix: only the FIRST task to reach this point for a given
++    // connection's lifetime actually invokes the callback; a concurrent
++    // second caller becomes a silent no-op instead of racing on shared
++    // state.
++    bool expected = false;
++    if (disconnect_callback_ &&
++        disconnect_callback_fired_.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+         disconnect_callback_();
+     }
+ }
+diff --git a/src/esp/esp_tcp.h b/src/esp/esp_tcp.h
+index 38cf61d..ca0d7fc 100644
+--- a/src/esp/esp_tcp.h
++++ b/src/esp/esp_tcp.h
+@@ -7,6 +7,8 @@
+ #include <freertos/event_groups.h>
+ #include <freertos/task.h>
+ 
++#include <atomic>
++
+ #define ESP_TCP_EVENT_RECEIVE_TASK_EXIT 1
+ 
+ class EspTcp : public Tcp {
+@@ -26,6 +28,18 @@ private:
+     TaskHandle_t receive_task_handle_ = nullptr;
+     int last_error_ = 0;
+ 
++    // StackChan local override (see components/78__esp-ml307/STACKCHAN_OVERRIDE.md
++    // for the full incident writeup): guards against DoDisconnect() being
++    // entered concurrently by two different tasks for the same connection
++    // - the task that owns this EspTcp actively closing it, and the
++    // background receive task independently discovering the same socket
++    // died - both of which would otherwise invoke disconnect_callback_()
++    // a second time on an object that isn't reentrant-safe for that. Reset
++    // at the start of each Connect() so a reused EspTcp object (if one
++    // ever is reused across multiple connections) starts each connection's
++    // lifetime with a fresh guard.
++    std::atomic<bool> disconnect_callback_fired_{false};
++
+     void ReceiveTask();
+     // 内部断开处理函数
+     // wait_for_task: 是否等待接收任务退出（主动断开为true，被动断开为false）
